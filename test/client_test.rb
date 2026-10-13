@@ -265,3 +265,67 @@ r = c.zrem("schedule", "job-a")
 m = c.zrange("schedule", 0, -1)
 puts "zcard_zrem   " + (n == 2 && r == true).to_s
 puts "zrange       " + (m.length == 1 && m[0] == "job-b").to_s
+
+# -- pipelined ------------------------------------------------------------------
+
+# one write for every queued command, every reply read, replies coerced
+# as the client coerces them (Integer, Boolean, String)
+t = ScriptedTransport.new([":1\r\n:3\r\n", ":1\r\n+OK\r\n"])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+  p.sadd("queues", "default")
+  p.lpush("queue:default", "{}")
+  p.zadd("schedule", 1.5, "j")
+  p.set("k", "v")
+end
+w = t.written
+puts "pipe_wire    " + (w == "*3\r\n$4\r\nSADD\r\n$6\r\nqueues\r\n$7\r\ndefault\r\n*3\r\n$5\r\nLPUSH\r\n$13\r\nqueue:default\r\n$2\r\n{}\r\n*4\r\n$4\r\nZADD\r\n$8\r\nschedule\r\n$3\r\n1.5\r\n$1\r\nj\r\n*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n").to_s
+puts "pipe_count   " + res.length.to_s
+puts "pipe_values  " + (res[0] == 1 && res[1] == 3 && res[2] == true && res[3] == "OK").to_s
+
+# an empty block sends nothing
+t = ScriptedTransport.new([])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+end
+puts "pipe_empty   " + (res.length == 0 && t.written == "").to_s
+
+# an error in the middle: the rest are still read, so the next command
+# gets its own reply, and the first error is raised
+t = ScriptedTransport.new([":1\r\n-WRONGTYPE Operation against a key holding the wrong kind of value\r\n:2\r\n", "+PONG\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.pipelined do |p|
+    p.sadd("queues", "default")
+    p.lpush("queues", "x")
+    p.rpush("list", "y")
+  end
+rescue Redis::WrongTypeError => e
+  kind = "wrongtype"
+end
+puts "pipe_error   " + kind
+puts "pipe_insync  " + c.ping
+
+# replies split across reads
+t = ScriptedTransport.new([":", "1\r", "\n:", "2\r\n"])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+  p.incrby("a", 1)
+  p.incrby("b", 2)
+end
+puts "pipe_chunked " + (res[0] == 1 && res[1] == 2).to_s
+
+# the connection lost mid-pipeline is a ConnectionError
+t = ScriptedTransport.new([":1\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.pipelined do |p|
+    p.sadd("queues", "default")
+    p.lpush("queue:default", "{}")
+  end
+rescue Redis::ConnectionError
+  kind = "connection"
+end
+puts "pipe_lost    " + kind

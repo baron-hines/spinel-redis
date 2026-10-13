@@ -39,6 +39,20 @@ and a socket that fails is a `Redis::CannotConnectError` or
 them are `Redis::BaseError`, a `StandardError`. Messages are
 unchanged from 0.1.1.
 
+Pipelining takes redis-rb's block form. The commands go out in one
+write, every reply is read, and the first error reply is raised after
+that, so the connection stays in step:
+
+```ruby
+r.pipelined do |p|
+  p.sadd("queues", "default")
+  p.lpush("queue:default", job)
+end                                # => [1, 1]
+```
+
+The block's recorder has `set`, `del`, `incrby`, `expire`, `lpush`,
+`rpush`, `sadd`, `hset` and `zadd`. A pipeline is not a transaction.
+
 Pub/sub mirrors redis-rb's block DSL. A subscribed connection is
 dedicated (RESP2), so pubsub gets its own; the loop blocks until the
 subscription count drains to zero, and handlers drive unsubscription:
@@ -88,6 +102,7 @@ Three layers, each testable one level down:
 | `redis/client.rb` | typed per-command methods over an injected transport duck | dual-runtime, against a scripted transport |
 | `redis/errors.rb` | redis-rb's error classes | dual-runtime, against a scripted transport |
 | `redis/url.rb` | `redis://` URL parsing and redaction | dual-runtime |
+| `redis/pipeline.rb` | the `pipelined` recorder | dual-runtime, against a scripted transport |
 | `redis/pubsub.rb` | SUBSCRIBE-mode dispatch loop + block-DSL listener | dual-runtime (scripted) + compiled-only live test |
 | `redis/sock.rb` + `redis/connection.rb` | the real `sp_net` transport | compiled-only live test against a real redis-server (committed snapshot) |
 
@@ -155,7 +170,7 @@ Deliberately not in this release, recorded rather than implied:
 - **Sentinel / Cluster / `dist_redis`** — single connection to a single
   server. Mastodon supports Sentinel via env, so this is a future ledger
   entry, not a never.
-- **SCAN family, transactions, pipelining, unix sockets** —
+- **SCAN family, transactions, unix sockets** —
   straightforward additions when a consumer needs them. `unix://` URLs
   raise an `ArgumentError`.
 - Variadic command forms are narrowed to typed arities (`del(key)`,
@@ -169,6 +184,13 @@ Deliberately not in this release, recorded rather than implied:
   from the environment by itself as redis-rb does. No `reconnect_attempts`:
   once a connection is lost every later call raises, and the caller opens
   a new one.
+- Bulk replies are binary (`ASCII-8BIT`) Strings, so they are
+  binary-safe; redis-rb returns them tagged UTF-8. The bytes are the
+  same, but `==` against a UTF-8 literal with non-ASCII characters is
+  false here. Compare bytes, or `force_encoding("UTF-8")` the reply.
+- `pipelined` takes no `exception: false`, and its recorder has only the
+  commands listed above. Its return value holds the coerced replies, as
+  redis-rb's does, with an error reply's message in its place.
 
 ## Spinel notes
 

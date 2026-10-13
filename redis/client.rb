@@ -7,6 +7,7 @@
 # Commands are individual typed methods built on a typed Array<String>
 # plumbing layer — deliberately no public call(*args) funnel.
 require "redis/resp"
+require "redis/pipeline"
 
 class RedisClientCore
   def initialize(transport)
@@ -54,6 +55,54 @@ class RedisClientCore
       end
       @parser.feed(chunk)
     end
+  end
+
+  # redis-rb's pipelined: queue commands in the block, send them in one
+  # write, read every reply, then raise the first error reply if there
+  # was one. Returns the replies, coerced as the client's own methods
+  # coerce them.
+  def pipelined
+    p = RedisPipeline.new
+    yield p
+    run_pipeline(p)
+  end
+
+  def run_pipeline(p)
+    out = []
+    n = p.argvs.length
+    if n == 0
+      return out
+    end
+    data = ""
+    p.argvs.each do |argv|
+      data = data + Resp.encode_command(argv)
+    end
+    send_bytes(data)
+    failed = false
+    first_error = ""
+    i = 0
+    while i < n
+      r = read_value
+      kind = p.kinds[i]
+      if r.kind == RespValue::ERROR
+        if !failed
+          failed = true
+          first_error = r.str
+        end
+        out.push(r.str)
+      elsif kind == RedisPipeline::BOOL
+        out.push(r.int == 1)
+      elsif kind == RedisPipeline::INT
+        out.push(r.int)
+      else
+        out.push(r.str)
+      end
+      i = i + 1
+    end
+    if failed
+      raise Redis.command_error(first_error)
+    end
+    out
   end
 
   # Reply coercions. Status (+OK) and bulk both land in str.

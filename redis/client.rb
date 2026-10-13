@@ -21,22 +21,36 @@ class RedisClientCore
   # -- plumbing ---------------------------------------------------------
 
   def call_argv(argv)
-    @t.write(Resp.encode_command(argv))
+    send_bytes(Resp.encode_command(argv))
     read_reply
   end
 
+  def send_bytes(data)
+    if @t.write(data) < 0
+      raise Redis::ConnectionError.new("redis: connection lost")
+    end
+    data.bytesize
+  end
+
+  # The next reply; an error reply raises as redis-rb's CommandError
+  # family (Redis.command_error picks the subclass from its prefix).
   def read_reply
+    r = read_value
+    if r.kind == RespValue::ERROR
+      raise Redis.command_error(r.str)
+    end
+    r
+  end
+
+  # The next whole reply, error replies included.
+  def read_value
     while true
       if @parser.try_next
-        r = @parser.reply
-        if r.kind == RespValue::ERROR
-          raise "redis: " + r.str
-        end
-        return r
+        return @parser.reply
       end
       chunk = @t.read_some(65536)
       if chunk.bytesize == 0
-        raise "redis: connection lost"
+        raise Redis::ConnectionError.new("redis: connection lost")
       end
       @parser.feed(chunk)
     end
@@ -76,6 +90,15 @@ class RedisClientCore
 
   def ping
     str_reply(["PING"])
+  end
+
+  # AUTH password, or AUTH username password (Redis 6 ACLs), as
+  # redis-rb's auth(*args) takes them.
+  def auth(user_or_password, password = nil)
+    if password.nil?
+      return str_reply(["AUTH", user_or_password.to_s])
+    end
+    str_reply(["AUTH", user_or_password.to_s, password.to_s])
   end
 
   def echo(s)
@@ -238,3 +261,6 @@ class RedisClientCore
     int_reply(["PUBLISH", channel.to_s, message.to_s])
   end
 end
+
+# redis-rb error classes; RedisClientCore has to exist first.
+require "redis/errors"

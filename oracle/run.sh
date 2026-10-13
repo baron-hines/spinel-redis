@@ -28,7 +28,8 @@ done
 fails=0
 ran=0
 for flow in example_basic example_incr_decr example_list example_sets \
-            example_pubsub example_prefork live_smoke pubsub_live; do
+            example_pubsub example_prefork live_smoke pubsub_live \
+            auth_live; do
   redis-cli -p $ORACLE_PORT flushall >/dev/null
   ruby "oracle/$flow.rb" $ORACLE_PORT > "$OUTDIR/$flow.out" 2>&1
   ran=$((ran + 1))

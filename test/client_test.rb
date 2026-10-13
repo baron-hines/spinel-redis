@@ -5,6 +5,7 @@
 # EXISTS/EXPIRE/SISMEMBER, Hash for HGETALL).
 require "redis/resp"
 require "redis/client"
+require "redis/url"
 
 # Serves canned reply bytes chunk-by-chunk and records every write.
 class ScriptedTransport
@@ -137,3 +138,98 @@ rescue => e
   raised = e.message.include?("connection lost")
 end
 puts "closed_raise " + raised.to_s
+
+# -- error classes: redis-rb names ------------------------------------------
+
+# an error reply is a CommandError, a lost connection a ConnectionError,
+# and neither is mistaken for the other
+t = ScriptedTransport.new(["-ERR unknown command 'FROB'\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.ping
+rescue Redis::BaseConnectionError
+  kind = "connection"
+rescue Redis::CommandError => e
+  kind = "command " + e.message
+end
+puts "err_class    " + kind
+
+t = ScriptedTransport.new(["-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.incr("s")
+rescue Redis::WrongTypeError => e
+  kind = "wrongtype " + e.is_a?(Redis::CommandError).to_s + " " + e.is_a?(Redis::BaseError).to_s
+end
+puts "err_wrongty  " + kind
+
+t = ScriptedTransport.new(["-NOPERM this user has no permissions\r\n", "-OOM command not allowed\r\n"])
+c = RedisClientCore.new(t)
+kinds = ""
+begin
+  c.ping
+rescue Redis::PermissionError
+  kinds = kinds + "noperm "
+end
+begin
+  c.ping
+rescue Redis::OutOfMemoryError
+  kinds = kinds + "oom"
+end
+puts "err_prefixes " + kinds
+
+t = ScriptedTransport.new(["$10\r\npart"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.get("k")
+rescue Redis::CommandError
+  kind = "command"
+rescue Redis::ConnectionError => e
+  kind = "connection " + e.is_a?(Redis::BaseConnectionError).to_s + " " + e.message
+end
+puts "err_lost     " + kind
+
+# -- AUTH -------------------------------------------------------------------
+
+t = ScriptedTransport.new(["+OK\r\n", "+OK\r\n"])
+c = RedisClientCore.new(t)
+a = c.auth("s3cret")
+b = c.auth("app", "pw")
+w = t.written
+puts "auth_wire    " + (w == "*2\r\n$4\r\nAUTH\r\n$6\r\ns3cret\r\n*3\r\n$4\r\nAUTH\r\n$3\r\napp\r\n$2\r\npw\r\n").to_s
+puts "auth_reply   " + (a == "OK" && b == "OK").to_s
+
+# -- redis:// URLs ----------------------------------------------------------
+
+def url_line(url)
+  u = RedisURL.parse(url)
+  u.host + "|" + u.port.to_s + "|" + u.username + "|" + u.password + "|" + u.db.to_s
+end
+
+puts "url_bare     " + url_line("redis://localhost")
+puts "url_full     " + url_line("redis://:s3cret@cache.internal:6380/2")
+puts "url_user     " + url_line("redis://app:p%40ss+word@10.0.0.5/7")
+puts "url_useronly " + url_line("redis://onlysecret@host")
+puts "url_empty    " + url_line("redis://")
+puts "url_query    " + url_line("redis://host:6390?db=4")
+puts "url_ipv6     " + url_line("redis://[::1]:6381/1")
+
+def url_error(url)
+  begin
+    RedisURL.parse(url)
+    "parsed"
+  rescue ArgumentError => e
+    e.message
+  end
+end
+
+puts "url_tls      " + url_error("rediss://:pw@host:6380").include?("rediss:// (TLS) is not supported").to_s
+puts "url_unix     " + url_error("unix:///tmp/redis.sock").include?("unix sockets").to_s
+puts "url_scheme   " + url_error("http://:pw@host")
+puts "url_badport  " + url_error("redis://host:63x9")
+puts "redact       " + RedisURL.redact("redis://app:hunter2@host:6379/0")
+puts "redact_pw    " + RedisURL.redact("redis://:hunter2@host")
+puts "redact_none  " + RedisURL.redact("redis://host:6379/0")

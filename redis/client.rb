@@ -255,6 +255,49 @@ class RedisClientCore
     out
   end
 
+  # -- sorted sets -----------------------------------------------------------
+
+  # One score/member pair, as redis-rb's single-pair form: true when the
+  # member is new. The score is written with to_s, the spelling redis-rb
+  # sends (Float#to_s for a Float).
+  def zadd(key, score, member)
+    bool_reply(["ZADD", key.to_s, score.to_s, member.to_s])
+  end
+
+  # One member; true when it was there.
+  def zrem(key, member)
+    bool_reply(["ZREM", key.to_s, member.to_s])
+  end
+
+  def zcard(key)
+    int_reply(["ZCARD", key.to_s])
+  end
+
+  # The member's score as a Float, or nil when it isn't in the set.
+  def zscore(key, member)
+    s = opt_reply(["ZSCORE", key.to_s, member.to_s])
+    if s.nil?
+      return nil
+    end
+    RedisClientCore.float_of(s)
+  end
+
+  # Members by rank. redis-rb's with_scores: form isn't mirrored (ledger).
+  def zrange(key, start, stop)
+    strings_reply(["ZRANGE", key.to_s, start.to_s, stop.to_s])
+  end
+
+  # A score reply as redis-rb's Floatify reads it.
+  def self.float_of(s)
+    if s == "inf"
+      return Float::INFINITY
+    end
+    if s == "-inf"
+      return -Float::INFINITY
+    end
+    s.to_f
+  end
+
   # -- pub/sub (publish side only; SUBSCRIBE mode is the next milestone) --
 
   def publish(channel, message)

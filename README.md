@@ -86,6 +86,8 @@ Three layers, each testable one level down:
 |---|---|---|
 | `redis/resp.rb` | RESP2 encoding (pure functions) + incremental reply parser | dual-runtime: same test runs compiled and under CRuby |
 | `redis/client.rb` | typed per-command methods over an injected transport duck | dual-runtime, against a scripted transport |
+| `redis/errors.rb` | redis-rb's error classes | dual-runtime, against a scripted transport |
+| `redis/url.rb` | `redis://` URL parsing and redaction | dual-runtime |
 | `redis/pubsub.rb` | SUBSCRIBE-mode dispatch loop + block-DSL listener | dual-runtime (scripted) + compiled-only live test |
 | `redis/sock.rb` + `redis/connection.rb` | the real `sp_net` transport | compiled-only live test against a real redis-server (committed snapshot) |
 
@@ -157,8 +159,11 @@ Deliberately not in this release, recorded rather than implied:
   straightforward additions when a consumer needs them. `unix://` URLs
   raise an `ArgumentError`.
 - Variadic command forms are narrowed to typed arities (`del(key)`,
-  `sadd(key, member)`); `sadd` returns the Integer added-count, redis-rb's
-  legacy Boolean mode is not mirrored.
+  `sadd(key, member)`, `zadd(key, score, member)`); `sadd` returns the
+  Integer added-count, redis-rb's legacy Boolean mode is not mirrored.
+  `zadd` and `zrem` take one member and return a Boolean, as redis-rb's
+  single-member forms do. `zadd`'s `nx:`/`xx:`/`incr:` options and
+  `zrange`'s `with_scores:` are not mirrored; `zscore` reads one score.
 - `Redis.new` takes `host` and `port` positionally or a `url:`, not
   redis-rb's `host:`/`port:` keywords, and it doesn't read `REDIS_URL`
   from the environment by itself as redis-rb does. No `reconnect_attempts`:

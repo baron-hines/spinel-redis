@@ -233,3 +233,35 @@ puts "url_badport  " + url_error("redis://host:63x9")
 puts "redact       " + RedisURL.redact("redis://app:hunter2@host:6379/0")
 puts "redact_pw    " + RedisURL.redact("redis://:hunter2@host")
 puts "redact_none  " + RedisURL.redact("redis://host:6379/0")
+
+# -- sorted sets ----------------------------------------------------------------
+
+# ZADD writes the score with to_s (Float and Integer) and reads :1/:0 as
+# a Boolean, as redis-rb's single-pair form does
+t = ScriptedTransport.new([":1\r\n", ":0\r\n"])
+c = RedisClientCore.new(t)
+a = c.zadd("schedule", 1791599858.8335917, "job-a")
+b = c.zadd("schedule", 5, "job-b")
+w = t.written
+puts "zadd_wire    " + (w == "*4\r\n$4\r\nZADD\r\n$8\r\nschedule\r\n$18\r\n1791599858.8335917\r\n$5\r\njob-a\r\n*4\r\n$4\r\nZADD\r\n$8\r\nschedule\r\n$1\r\n5\r\n$5\r\njob-b\r\n").to_s
+puts "zadd_bool    " + (a == true && b == false).to_s
+
+# ZSCORE: bulk -> Float, $-1 -> nil, inf spelled as Redis does
+t = ScriptedTransport.new(["$18\r\n1791599858.8335917\r\n", "$-1\r\n", "$3\r\ninf\r\n", "$4\r\n-inf\r\n"])
+c = RedisClientCore.new(t)
+s1 = c.zscore("schedule", "job-a")
+s2 = c.zscore("schedule", "nope")
+s3 = c.zscore("schedule", "far")
+s4 = c.zscore("schedule", "past")
+puts "zscore_float " + (s1 == 1791599858.8335917).to_s
+puts "zscore_nil   " + s2.nil?.to_s
+puts "zscore_inf   " + (s3 == Float::INFINITY && s4 == -Float::INFINITY).to_s
+
+# ZCARD, ZREM, ZRANGE
+t = ScriptedTransport.new([":2\r\n", ":1\r\n", "*1\r\n$5\r\njob-b\r\n"])
+c = RedisClientCore.new(t)
+n = c.zcard("schedule")
+r = c.zrem("schedule", "job-a")
+m = c.zrange("schedule", 0, -1)
+puts "zcard_zrem   " + (n == 2 && r == true).to_s
+puts "zrange       " + (m.length == 1 && m[0] == "job-b").to_s

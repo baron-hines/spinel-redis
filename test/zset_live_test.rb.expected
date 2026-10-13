@@ -1,0 +1,22 @@
+zadd_new     true
+zadd_new     true
+zadd_new     true
+zadd_new     true
+zadd_new     true
+zadd_new     true
+zadd_again   false
+zcard        6
+zscore_0     true 42.0
+zscore_1     true 1791599858.832
+zscore_2     true 1791599558.0
+zscore_3     true 123456789.12345679
+zscore_4     true 0.30000000000000004
+zscore_5     true 1791599558.9999998
+zscore_nil   true
+zrange       job-4,job-0,job-3,job-2,job-5,job-1
+zrange_top2  job-5,job-1
+zrem         true
+zrem_again   false
+zcard_after  5
+wrongtype    true
+done

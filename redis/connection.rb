@@ -4,12 +4,13 @@
 # write_bytes takes an explicit byte count so embedded NULs survive the
 # send side too.
 require "redis/sock"
+require "redis/client"   # the error classes
 
 class RedisTransport
   def initialize(host, port)
     @fd = RedisSock.sp_net_connect(host, port)
     if @fd < 0
-      raise "redis: cannot connect to " + host + ":" + port.to_s
+      raise Redis::CannotConnectError.new("redis: cannot connect to " + host + ":" + port.to_s)
     end
   end
 

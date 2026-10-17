@@ -7,6 +7,7 @@
 # Commands are individual typed methods built on a typed Array<String>
 # plumbing layer — deliberately no public call(*args) funnel.
 require "redis/resp"
+require "redis/pipeline"
 
 class RedisClientCore
   def initialize(transport)
@@ -21,25 +22,87 @@ class RedisClientCore
   # -- plumbing ---------------------------------------------------------
 
   def call_argv(argv)
-    @t.write(Resp.encode_command(argv))
+    send_bytes(Resp.encode_command(argv))
     read_reply
   end
 
+  def send_bytes(data)
+    if @t.write(data) < 0
+      raise Redis::ConnectionError.new("redis: connection lost")
+    end
+    data.bytesize
+  end
+
+  # The next reply; an error reply raises as redis-rb's CommandError
+  # family (Redis.command_error picks the subclass from its prefix).
   def read_reply
+    r = read_value
+    if r.kind == RespValue::ERROR
+      raise Redis.command_error(r.str)
+    end
+    r
+  end
+
+  # The next whole reply, error replies included.
+  def read_value
     while true
       if @parser.try_next
-        r = @parser.reply
-        if r.kind == RespValue::ERROR
-          raise "redis: " + r.str
-        end
-        return r
+        return @parser.reply
       end
       chunk = @t.read_some(65536)
       if chunk.bytesize == 0
-        raise "redis: connection lost"
+        raise Redis::ConnectionError.new("redis: connection lost")
       end
       @parser.feed(chunk)
     end
+  end
+
+  # redis-rb's pipelined: queue commands in the block, send them in one
+  # write, read every reply, then raise the first error reply if there
+  # was one. Returns the replies, coerced as the client's own methods
+  # coerce them.
+  def pipelined
+    p = RedisPipeline.new
+    yield p
+    run_pipeline(p)
+  end
+
+  def run_pipeline(p)
+    out = []
+    n = p.argvs.length
+    if n == 0
+      return out
+    end
+    data = ""
+    p.argvs.each do |argv|
+      data = data + Resp.encode_command(argv)
+    end
+    send_bytes(data)
+    failed = false
+    first_error = ""
+    i = 0
+    while i < n
+      r = read_value
+      kind = p.kinds[i]
+      if r.kind == RespValue::ERROR
+        if !failed
+          failed = true
+          first_error = r.str
+        end
+        out.push(r.str)
+      elsif kind == RedisPipeline::BOOL
+        out.push(r.int == 1)
+      elsif kind == RedisPipeline::INT
+        out.push(r.int)
+      else
+        out.push(r.str)
+      end
+      i = i + 1
+    end
+    if failed
+      raise Redis.command_error(first_error)
+    end
+    out
   end
 
   # Reply coercions. Status (+OK) and bulk both land in str.
@@ -76,6 +139,15 @@ class RedisClientCore
 
   def ping
     str_reply(["PING"])
+  end
+
+  # AUTH password, or AUTH username password (Redis 6 ACLs), as
+  # redis-rb's auth(*args) takes them.
+  def auth(user_or_password, password = nil)
+    if password.nil?
+      return str_reply(["AUTH", user_or_password.to_s])
+    end
+    str_reply(["AUTH", user_or_password.to_s, password.to_s])
   end
 
   def echo(s)
@@ -232,9 +304,55 @@ class RedisClientCore
     out
   end
 
+  # -- sorted sets -----------------------------------------------------------
+
+  # One score/member pair, as redis-rb's single-pair form: true when the
+  # member is new. The score is written with to_s, the spelling redis-rb
+  # sends (Float#to_s for a Float).
+  def zadd(key, score, member)
+    bool_reply(["ZADD", key.to_s, score.to_s, member.to_s])
+  end
+
+  # One member; true when it was there.
+  def zrem(key, member)
+    bool_reply(["ZREM", key.to_s, member.to_s])
+  end
+
+  def zcard(key)
+    int_reply(["ZCARD", key.to_s])
+  end
+
+  # The member's score as a Float, or nil when it isn't in the set.
+  def zscore(key, member)
+    s = opt_reply(["ZSCORE", key.to_s, member.to_s])
+    if s.nil?
+      return nil
+    end
+    RedisClientCore.float_of(s)
+  end
+
+  # Members by rank. redis-rb's with_scores: form isn't mirrored (ledger).
+  def zrange(key, start, stop)
+    strings_reply(["ZRANGE", key.to_s, start.to_s, stop.to_s])
+  end
+
+  # A score reply as redis-rb's Floatify reads it.
+  def self.float_of(s)
+    if s == "inf"
+      return Float::INFINITY
+    end
+    if s == "-inf"
+      return -Float::INFINITY
+    end
+    s.to_f
+  end
+
   # -- pub/sub (publish side only; SUBSCRIBE mode is the next milestone) --
 
   def publish(channel, message)
     int_reply(["PUBLISH", channel.to_s, message.to_s])
   end
 end
+
+# redis-rb error classes; RedisClientCore has to exist first.
+require "redis/errors"

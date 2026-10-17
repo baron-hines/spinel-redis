@@ -1,0 +1,13 @@
+push_1       2 1 1
+push_2       0 2
+llen         2
+queues       default
+job_intact   true
+zadd_piped   true
+zscore       true
+mixed        OK 5 true 1 1
+pipe_error   true
+rest_ran     1 1
+in_sync      PONG
+after_kill   connection error
+done

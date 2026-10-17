@@ -1,0 +1,12 @@
+ping_url     PONG
+noauth       CommandError true
+wrongpass    CannotConnectError true
+pw_keyword   PONG
+set_db3      OK
+db0_missing  true
+db_keyword   in-three
+acl_user     PONG
+before_kill  PONG
+after_kill   true
+no_server    CannotConnectError
+done

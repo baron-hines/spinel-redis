@@ -16,6 +16,43 @@ r.exists?("k")      # => true
 r.hgetall("h")      # => {"f" => "1", ...}
 ```
 
+`Redis.new` also takes redis-rb's `url:` form, with the password,
+ACL username and database number in the URL or as keywords:
+
+```ruby
+r = Redis.new(url: "redis://:s3cret@cache.internal:6380/2")
+r = Redis.new(url: ENV["REDIS_URL"], db: 3)    # db: overrides the URL's
+```
+
+The URL is read the way redis-rb 5 reads it: a user with no password
+is the password, the password is percent-decoded, and the database
+comes from the path or a `db=` query parameter. After connecting the
+client sends `AUTH` when there is a password and `SELECT` when the
+database isn't 0. A refusal there is a `Redis::CannotConnectError`, as
+in redis-rb. `RedisURL.redact(url)` hides the password for logs.
+
+Errors use redis-rb's classes, so one rescue works against either
+client. An error reply is a `Redis::CommandError` (or its
+`WrongTypeError`, `PermissionError` or `OutOfMemoryError` subclass),
+and a socket that fails is a `Redis::CannotConnectError` or
+`Redis::ConnectionError`, both `Redis::BaseConnectionError`. All of
+them are `Redis::BaseError`, a `StandardError`. Messages are
+unchanged from 0.1.1.
+
+Pipelining takes redis-rb's block form. The commands go out in one
+write, every reply is read, and the first error reply is raised after
+that, so the connection stays in step:
+
+```ruby
+r.pipelined do |p|
+  p.sadd("queues", "default")
+  p.lpush("queue:default", job)
+end                                # => [1, 1]
+```
+
+The block's recorder has `set`, `del`, `incrby`, `expire`, `lpush`,
+`rpush`, `sadd`, `hset` and `zadd`. A pipeline is not a transaction.
+
 Pub/sub mirrors redis-rb's block DSL. A subscribed connection is
 dedicated (RESP2), so pubsub gets its own; the loop blocks until the
 subscription count drains to zero, and handlers drive unsubscription:
@@ -63,6 +100,9 @@ Three layers, each testable one level down:
 |---|---|---|
 | `redis/resp.rb` | RESP2 encoding (pure functions) + incremental reply parser | dual-runtime: same test runs compiled and under CRuby |
 | `redis/client.rb` | typed per-command methods over an injected transport duck | dual-runtime, against a scripted transport |
+| `redis/errors.rb` | redis-rb's error classes | dual-runtime, against a scripted transport |
+| `redis/url.rb` | `redis://` URL parsing and redaction | dual-runtime |
+| `redis/pipeline.rb` | the `pipelined` recorder | dual-runtime, against a scripted transport |
 | `redis/pubsub.rb` | SUBSCRIBE-mode dispatch loop + block-DSL listener | dual-runtime (scripted) + compiled-only live test |
 | `redis/sock.rb` + `redis/connection.rb` | the real `sp_net` transport | compiled-only live test against a real redis-server (committed snapshot) |
 
@@ -126,16 +166,31 @@ Deliberately not in this release, recorded rather than implied:
   connection per subscriber is the model, as in redis-rb's default.
 - **TLS** — `sp_net` has no TLS yet (matz/spinel#1054); TLS-only managed
   Redis endpoints (ElastiCache in-transit encryption etc.) need a local
-  stunnel/nginx hop for now.
+  stunnel/nginx hop for now. `rediss://` URLs raise an `ArgumentError` saying so.
 - **Sentinel / Cluster / `dist_redis`** — single connection to a single
   server. Mastodon supports Sentinel via env, so this is a future ledger
   entry, not a never.
-- **AUTH/ACL, SCAN family, transactions, pipelining, unix sockets** —
-  straightforward additions when a consumer needs them.
+- **SCAN family, transactions, unix sockets** —
+  straightforward additions when a consumer needs them. `unix://` URLs
+  raise an `ArgumentError`.
 - Variadic command forms are narrowed to typed arities (`del(key)`,
-  `sadd(key, member)`); `sadd` returns the Integer added-count, redis-rb's
-  legacy Boolean mode is not mirrored.
-- `Redis.new(host, port)` is positional for now (redis-rb uses kwargs/URL).
+  `sadd(key, member)`, `zadd(key, score, member)`); `sadd` returns the
+  Integer added-count, redis-rb's legacy Boolean mode is not mirrored.
+  `zadd` and `zrem` take one member and return a Boolean, as redis-rb's
+  single-member forms do. `zadd`'s `nx:`/`xx:`/`incr:` options and
+  `zrange`'s `with_scores:` are not mirrored; `zscore` reads one score.
+- `Redis.new` takes `host` and `port` positionally or a `url:`, not
+  redis-rb's `host:`/`port:` keywords, and it doesn't read `REDIS_URL`
+  from the environment by itself as redis-rb does. No `reconnect_attempts`:
+  once a connection is lost every later call raises, and the caller opens
+  a new one.
+- Bulk replies are binary (`ASCII-8BIT`) Strings, so they are
+  binary-safe; redis-rb returns them tagged UTF-8. The bytes are the
+  same, but `==` against a UTF-8 literal with non-ASCII characters is
+  false here. Compare bytes, or `force_encoding("UTF-8")` the reply.
+- `pipelined` takes no `exception: false`, and its recorder has only the
+  commands listed above. Its return value holds the coerced replies, as
+  redis-rb's does, with an error reply's message in its place.
 
 ## Spinel notes
 

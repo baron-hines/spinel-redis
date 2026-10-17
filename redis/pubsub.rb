@@ -18,6 +18,7 @@
 # Handler blocks live in ivars initialized to no-op lambdas — never nil,
 # so dispatch stays monomorphic (no poly Proc|nil receivers).
 require "redis/resp"
+require "redis/client"   # the error classes
 
 class RedisListener
   def initialize
@@ -157,7 +158,7 @@ class RedisPubSub
   def drain(listener)
     chunk = @t.read_some(65536)
     if chunk.bytesize == 0
-      raise "redis: connection lost (subscribe mode)"
+      raise Redis::ConnectionError.new("redis: connection lost (subscribe mode)")
     end
     @parser.feed(chunk)
     n = 0
@@ -202,7 +203,7 @@ class RedisPubSub
       else
         chunk = @t.read_some(65536)
         if chunk.bytesize == 0
-          raise "redis: connection lost (subscribe mode)"
+          raise Redis::ConnectionError.new("redis: connection lost (subscribe mode)")
         end
         @parser.feed(chunk)
       end
@@ -214,7 +215,7 @@ class RedisPubSub
   # are bulk (binary-safe).
   def dispatch(r, listener)
     if r.kind == RespValue::ERROR
-      raise "redis: " + r.str
+      raise Redis.command_error(r.str)
     end
     if r.kind != RespValue::ARRAY
       return                       # e.g. +PONG if a ping was sent; ignore

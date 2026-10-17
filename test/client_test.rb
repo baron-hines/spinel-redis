@@ -5,6 +5,7 @@
 # EXISTS/EXPIRE/SISMEMBER, Hash for HGETALL).
 require "redis/resp"
 require "redis/client"
+require "redis/url"
 
 # Serves canned reply bytes chunk-by-chunk and records every write.
 class ScriptedTransport
@@ -137,3 +138,194 @@ rescue => e
   raised = e.message.include?("connection lost")
 end
 puts "closed_raise " + raised.to_s
+
+# -- error classes: redis-rb names ------------------------------------------
+
+# an error reply is a CommandError, a lost connection a ConnectionError,
+# and neither is mistaken for the other
+t = ScriptedTransport.new(["-ERR unknown command 'FROB'\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.ping
+rescue Redis::BaseConnectionError
+  kind = "connection"
+rescue Redis::CommandError => e
+  kind = "command " + e.message
+end
+puts "err_class    " + kind
+
+t = ScriptedTransport.new(["-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.incr("s")
+rescue Redis::WrongTypeError => e
+  kind = "wrongtype " + e.is_a?(Redis::CommandError).to_s + " " + e.is_a?(Redis::BaseError).to_s
+end
+puts "err_wrongty  " + kind
+
+t = ScriptedTransport.new(["-NOPERM this user has no permissions\r\n", "-OOM command not allowed\r\n"])
+c = RedisClientCore.new(t)
+kinds = ""
+begin
+  c.ping
+rescue Redis::PermissionError
+  kinds = kinds + "noperm "
+end
+begin
+  c.ping
+rescue Redis::OutOfMemoryError
+  kinds = kinds + "oom"
+end
+puts "err_prefixes " + kinds
+
+t = ScriptedTransport.new(["$10\r\npart"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.get("k")
+rescue Redis::CommandError
+  kind = "command"
+rescue Redis::ConnectionError => e
+  kind = "connection " + e.is_a?(Redis::BaseConnectionError).to_s + " " + e.message
+end
+puts "err_lost     " + kind
+
+# -- AUTH -------------------------------------------------------------------
+
+t = ScriptedTransport.new(["+OK\r\n", "+OK\r\n"])
+c = RedisClientCore.new(t)
+a = c.auth("s3cret")
+b = c.auth("app", "pw")
+w = t.written
+puts "auth_wire    " + (w == "*2\r\n$4\r\nAUTH\r\n$6\r\ns3cret\r\n*3\r\n$4\r\nAUTH\r\n$3\r\napp\r\n$2\r\npw\r\n").to_s
+puts "auth_reply   " + (a == "OK" && b == "OK").to_s
+
+# -- redis:// URLs ----------------------------------------------------------
+
+def url_line(url)
+  u = RedisURL.parse(url)
+  u.host + "|" + u.port.to_s + "|" + u.username + "|" + u.password + "|" + u.db.to_s
+end
+
+puts "url_bare     " + url_line("redis://localhost")
+puts "url_full     " + url_line("redis://:s3cret@cache.internal:6380/2")
+puts "url_user     " + url_line("redis://app:p%40ss+word@10.0.0.5/7")
+puts "url_useronly " + url_line("redis://onlysecret@host")
+puts "url_empty    " + url_line("redis://")
+puts "url_query    " + url_line("redis://host:6390?db=4")
+puts "url_ipv6     " + url_line("redis://[::1]:6381/1")
+
+def url_error(url)
+  begin
+    RedisURL.parse(url)
+    "parsed"
+  rescue ArgumentError => e
+    e.message
+  end
+end
+
+puts "url_tls      " + url_error("rediss://:pw@host:6380").include?("rediss:// (TLS) is not supported").to_s
+puts "url_unix     " + url_error("unix:///tmp/redis.sock").include?("unix sockets").to_s
+puts "url_scheme   " + url_error("http://:pw@host")
+puts "url_badport  " + url_error("redis://host:63x9")
+puts "redact       " + RedisURL.redact("redis://app:hunter2@host:6379/0")
+puts "redact_pw    " + RedisURL.redact("redis://:hunter2@host")
+puts "redact_none  " + RedisURL.redact("redis://host:6379/0")
+
+# -- sorted sets ----------------------------------------------------------------
+
+# ZADD writes the score with to_s (Float and Integer) and reads :1/:0 as
+# a Boolean, as redis-rb's single-pair form does
+t = ScriptedTransport.new([":1\r\n", ":0\r\n"])
+c = RedisClientCore.new(t)
+a = c.zadd("schedule", 1791599858.8335917, "job-a")
+b = c.zadd("schedule", 5, "job-b")
+w = t.written
+puts "zadd_wire    " + (w == "*4\r\n$4\r\nZADD\r\n$8\r\nschedule\r\n$18\r\n1791599858.8335917\r\n$5\r\njob-a\r\n*4\r\n$4\r\nZADD\r\n$8\r\nschedule\r\n$1\r\n5\r\n$5\r\njob-b\r\n").to_s
+puts "zadd_bool    " + (a == true && b == false).to_s
+
+# ZSCORE: bulk -> Float, $-1 -> nil, inf spelled as Redis does
+t = ScriptedTransport.new(["$18\r\n1791599858.8335917\r\n", "$-1\r\n", "$3\r\ninf\r\n", "$4\r\n-inf\r\n"])
+c = RedisClientCore.new(t)
+s1 = c.zscore("schedule", "job-a")
+s2 = c.zscore("schedule", "nope")
+s3 = c.zscore("schedule", "far")
+s4 = c.zscore("schedule", "past")
+puts "zscore_float " + (s1 == 1791599858.8335917).to_s
+puts "zscore_nil   " + s2.nil?.to_s
+puts "zscore_inf   " + (s3 == Float::INFINITY && s4 == -Float::INFINITY).to_s
+
+# ZCARD, ZREM, ZRANGE
+t = ScriptedTransport.new([":2\r\n", ":1\r\n", "*1\r\n$5\r\njob-b\r\n"])
+c = RedisClientCore.new(t)
+n = c.zcard("schedule")
+r = c.zrem("schedule", "job-a")
+m = c.zrange("schedule", 0, -1)
+puts "zcard_zrem   " + (n == 2 && r == true).to_s
+puts "zrange       " + (m.length == 1 && m[0] == "job-b").to_s
+
+# -- pipelined ------------------------------------------------------------------
+
+# one write for every queued command, every reply read, replies coerced
+# as the client coerces them (Integer, Boolean, String)
+t = ScriptedTransport.new([":1\r\n:3\r\n", ":1\r\n+OK\r\n"])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+  p.sadd("queues", "default")
+  p.lpush("queue:default", "{}")
+  p.zadd("schedule", 1.5, "j")
+  p.set("k", "v")
+end
+w = t.written
+puts "pipe_wire    " + (w == "*3\r\n$4\r\nSADD\r\n$6\r\nqueues\r\n$7\r\ndefault\r\n*3\r\n$5\r\nLPUSH\r\n$13\r\nqueue:default\r\n$2\r\n{}\r\n*4\r\n$4\r\nZADD\r\n$8\r\nschedule\r\n$3\r\n1.5\r\n$1\r\nj\r\n*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n").to_s
+puts "pipe_count   " + res.length.to_s
+puts "pipe_values  " + (res[0] == 1 && res[1] == 3 && res[2] == true && res[3] == "OK").to_s
+
+# an empty block sends nothing
+t = ScriptedTransport.new([])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+end
+puts "pipe_empty   " + (res.length == 0 && t.written == "").to_s
+
+# an error in the middle: the rest are still read, so the next command
+# gets its own reply, and the first error is raised
+t = ScriptedTransport.new([":1\r\n-WRONGTYPE Operation against a key holding the wrong kind of value\r\n:2\r\n", "+PONG\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.pipelined do |p|
+    p.sadd("queues", "default")
+    p.lpush("queues", "x")
+    p.rpush("list", "y")
+  end
+rescue Redis::WrongTypeError => e
+  kind = "wrongtype"
+end
+puts "pipe_error   " + kind
+puts "pipe_insync  " + c.ping
+
+# replies split across reads
+t = ScriptedTransport.new([":", "1\r", "\n:", "2\r\n"])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+  p.incrby("a", 1)
+  p.incrby("b", 2)
+end
+puts "pipe_chunked " + (res[0] == 1 && res[1] == 2).to_s
+
+# the connection lost mid-pipeline is a ConnectionError
+t = ScriptedTransport.new([":1\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.pipelined do |p|
+    p.sadd("queues", "default")
+    p.lpush("queue:default", "{}")
+  end
+rescue Redis::ConnectionError
+  kind = "connection"
+end
+puts "pipe_lost    " + kind

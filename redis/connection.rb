@@ -7,12 +7,18 @@ require "redis/sock"
 require "redis/client"   # the error classes
 
 class RedisTransport
-  # read_timeout: seconds each read waits for the server, as redis-rb's
-  # option of the same name; nil waits forever.
-  def initialize(host, port, read_timeout = nil)
+  # read_timeout: seconds each read waits for the server, and
+  # connect_timeout: seconds the connect waits, as redis-rb's options of
+  # the same names; nil waits forever. A connect that runs out is a
+  # Redis::CannotConnectError, as in redis-rb.
+  def initialize(host, port, read_timeout = nil, connect_timeout = nil)
     @read_timeout = read_timeout.nil? ? -1.0 : read_timeout.to_f
-    @fd = RedisSock.sp_net_connect(host, port)
+    limit = connect_timeout.nil? ? -1.0 : connect_timeout.to_f
+    @fd = RedisSock.sp_net_connect_timeout(host, port, limit)
     if @fd < 0
+      if RedisSock.sp_net_take_connect_timeout == 1
+        raise Redis::CannotConnectError.new("redis: no connection to " + host + ":" + port.to_s + " within " + limit.to_s + "s")
+      end
       raise Redis::CannotConnectError.new("redis: cannot connect to " + host + ":" + port.to_s)
     end
   end

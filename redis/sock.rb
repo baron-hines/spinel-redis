@@ -15,4 +15,8 @@ module RedisSock
   # the last timed read gave up on it (Spinel's sp_net, matz/spinel#9584).
   ffi_func :sp_net_recv_some_timeout, [:int, :int, :double], :binstr
   ffi_func :sp_net_take_recv_timeout, [],                    :int
+  # connect with a deadline in seconds (negative: none), and whether the
+  # last timed connect gave up on it rather than being refused.
+  ffi_func :sp_net_connect_timeout,      [:str, :int, :double], :int
+  ffi_func :sp_net_take_connect_timeout, [],                    :int
 end

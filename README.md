@@ -46,11 +46,16 @@ connection is closed, since a late reply would otherwise be read as the
 next command's. redis-rb reconnects at that point; here every later
 call raises `Redis::ConnectionError`, and the caller opens a new client.
 The default, `nil`, waits as long as the server takes. Pub/sub reads
-have no deadline. It needs a Spinel with `sp_net_recv_some_timeout`
-(matz/spinel#9584).
+have no deadline.
+
+`connect_timeout:` bounds the connect the same way. A server that
+doesn't answer in time is a `Redis::CannotConnectError`, as in redis-rb,
+and the deadline covers every address the host resolves to. Both need a
+Spinel whose `sp_net` has the timed calls (`sp_net_recv_some_timeout`
+from matz/spinel#9584, and `sp_net_connect_timeout`).
 
 ```ruby
-r = Redis.new(url: ENV["REDIS_URL"], read_timeout: 1.0)
+r = Redis.new(url: ENV["REDIS_URL"], connect_timeout: 1.0, read_timeout: 1.0)
 ```
 
 Pipelining takes redis-rb's block form. The commands go out in one
@@ -98,7 +103,7 @@ ps.subscribe_start("timeline:1")
 loop { ps.drain(l) if fd_readable?(ps.fd) }   # io_wait / poll between
 ```
 
-No C, no FFI beyond the six `sp_net` externs the compiler links into
+No C, no FFI beyond the eight `sp_net` externs the compiler links into
 every binary: protocol encode/decode is pure Ruby (compiled to native
 code by spinel), the same architecture as redis-rb's own default driver.
 Bulk strings are binary-safe end to end (`write_bytes` with explicit
@@ -184,9 +189,6 @@ Deliberately not in this release, recorded rather than implied:
 - **Sentinel / Cluster / `dist_redis`** — single connection to a single
   server. Mastodon supports Sentinel via env, so this is a future ledger
   entry, not a never.
-- **`connect_timeout:`** — `sp_net` has no timed connect yet, so a
-  connect to an address that never answers waits for the kernel's own
-  timeout. `read_timeout:` is mirrored.
 - **SCAN family, transactions, unix sockets** —
   straightforward additions when a consumer needs them. `unix://` URLs
   raise an `ArgumentError`.

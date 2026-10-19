@@ -18,13 +18,15 @@ class Redis < RedisClientCore
   # Redis.new(url: "redis://:pw@host:6379/2")  -> redis-rb's form
   #
   # read_timeout: is how many seconds each read waits for a reply before
-  # raising Redis::TimeoutError (nil, the default, waits forever).
+  # raising Redis::TimeoutError, and connect_timeout: how long the
+  # connect waits before raising Redis::CannotConnectError (nil, the
+  # default for both, waits forever).
   # url: wins over host and port. password:, username: and db: override
   # what the URL says, as redis-rb's explicit options do. After connect
   # it sends AUTH when there is a password and SELECT when db isn't 0.
-  def initialize(host = "127.0.0.1", port = 6379, url: nil, username: nil, password: nil, db: 0, read_timeout: nil)
+  def initialize(host = "127.0.0.1", port = 6379, url: nil, username: nil, password: nil, db: 0, read_timeout: nil, connect_timeout: nil)
     target = Redis.target(host, port, url, username, password, db)
-    super(RedisTransport.new(target.host, target.port, read_timeout))
+    super(RedisTransport.new(target.host, target.port, read_timeout, connect_timeout))
     handshake(target)
   end
 

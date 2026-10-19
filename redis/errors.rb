@@ -38,6 +38,10 @@ class Redis < RedisClientCore
   class ConnectionError < BaseConnectionError
   end
 
+  # The server didn't answer within read_timeout.
+  class TimeoutError < BaseConnectionError
+  end
+
   # A command error reply, as the redis-rb class its prefix names.
   def self.command_error(message)
     if message.start_with?("WRONGTYPE")

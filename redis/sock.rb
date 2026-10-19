@@ -11,4 +11,8 @@ module RedisSock
   ffi_func :sp_net_close,       [:int],             :int
   ffi_func :sp_net_write_bytes, [:int, :str, :int], :int
   ffi_func :sp_net_recv_some,   [:int, :int],       :binstr
+  # recv_some with a deadline in seconds (negative: none), and whether
+  # the last timed read gave up on it (Spinel's sp_net, matz/spinel#9584).
+  ffi_func :sp_net_recv_some_timeout, [:int, :int, :double], :binstr
+  ffi_func :sp_net_take_recv_timeout, [],                    :int
 end

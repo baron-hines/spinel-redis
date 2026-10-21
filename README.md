@@ -39,6 +39,25 @@ and a socket that fails is a `Redis::CannotConnectError` or
 them are `Redis::BaseError`, a `StandardError`. Messages are
 unchanged from 0.1.1.
 
+`read_timeout:` bounds how long a command waits for its reply, in
+seconds, as in redis-rb. When it runs out the call raises
+`Redis::TimeoutError` (a `Redis::BaseConnectionError`) and the
+connection is closed, since a late reply would otherwise be read as the
+next command's. redis-rb reconnects at that point; here every later
+call raises `Redis::ConnectionError`, and the caller opens a new client.
+The default, `nil`, waits as long as the server takes. Pub/sub reads
+have no deadline.
+
+`connect_timeout:` bounds the connect the same way. A server that
+doesn't answer in time is a `Redis::CannotConnectError`, as in redis-rb,
+and the deadline covers every address the host resolves to. Both need a
+Spinel whose `sp_net` has the timed calls (`sp_net_recv_some_timeout`
+from matz/spinel#9584, and `sp_net_connect_timeout`).
+
+```ruby
+r = Redis.new(url: ENV["REDIS_URL"], connect_timeout: 1.0, read_timeout: 1.0)
+```
+
 Pipelining takes redis-rb's block form. The commands go out in one
 write, every reply is read, and the first error reply is raised after
 that, so the connection stays in step:
@@ -84,7 +103,7 @@ ps.subscribe_start("timeline:1")
 loop { ps.drain(l) if fd_readable?(ps.fd) }   # io_wait / poll between
 ```
 
-No C, no FFI beyond the four `sp_net` externs the compiler links into
+No C, no FFI beyond the eight `sp_net` externs the compiler links into
 every binary: protocol encode/decode is pure Ruby (compiled to native
 code by spinel), the same architecture as redis-rb's own default driver.
 Bulk strings are binary-safe end to end (`write_bytes` with explicit

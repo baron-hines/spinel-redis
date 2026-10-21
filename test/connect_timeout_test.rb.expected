@@ -1,0 +1,5 @@
+queue_full   true
+hung         CannotConnectError true
+waited       true
+refused      CannotConnectError true
+done

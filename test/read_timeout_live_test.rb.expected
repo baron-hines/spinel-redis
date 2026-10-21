@@ -1,0 +1,6 @@
+ping         PONG
+in_time      OK
+slow         TimeoutError true
+waited       true
+no_deadline  v
+done

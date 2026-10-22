@@ -105,6 +105,40 @@ class RedisClientCore
     out
   end
 
+  # A blocking command (BRPOP) waits up to its own timeout on the
+  # server, so the read deadline is that timeout plus the configured
+  # read_timeout, as redis-rb sets it. A timeout of 0 blocks on the
+  # server until a value arrives, so the read waits as long too. The
+  # transport's own deadline comes back afterwards.
+  def blocking_reply(argv, timeout)
+    base = @t.read_timeout
+    if timeout <= 0.0
+      @t.set_read_timeout(-1.0)
+    elsif base >= 0.0
+      @t.set_read_timeout(base + timeout)
+    end
+    begin
+      r = call_argv(argv)
+    ensure
+      @t.set_read_timeout(base)
+    end
+    r
+  end
+
+  # LPUSH/RPUSH with one value or an Array of them, as redis-rb takes
+  # either.
+  def self.push_argv(cmd, key, value)
+    argv = [cmd, key.to_s]
+    if value.is_a?(Array)
+      value.each do |v|
+        argv.push(v.to_s)
+      end
+    else
+      argv.push(value.to_s)
+    end
+    argv
+  end
+
   # Reply coercions. Status (+OK) and bulk both land in str.
   def str_reply(argv)
     call_argv(argv).str
@@ -227,8 +261,9 @@ class RedisClientCore
     int_reply(["LPUSH", key.to_s, value.to_s])
   end
 
+  # One value, or an Array of values pushed in order; the list length.
   def rpush(key, value)
-    int_reply(["RPUSH", key.to_s, value.to_s])
+    int_reply(RedisClientCore.push_argv("RPUSH", key, value))
   end
 
   def lpop(key)
@@ -237,6 +272,27 @@ class RedisClientCore
 
   def rpop(key)
     opt_reply(["RPOP", key.to_s])
+  end
+
+  # Pops from the first of keys that has an element, waiting up to
+  # timeout: seconds (0, the default, waits forever). [key, value], or []
+  # when the timeout passes: redis-rb returns nil there, and [] keeps one
+  # return type.
+  def brpop(keys, timeout: 0)
+    argv = ["BRPOP"]
+    keys.each do |k|
+      argv.push(k.to_s)
+    end
+    argv.push(timeout.to_s)
+    r = blocking_reply(argv, timeout.to_f)
+    out = []
+    if r.kind == RespValue::NILV
+      return out
+    end
+    r.items.each do |x|
+      out.push(x.str)
+    end
+    out
   end
 
   def llen(key)
@@ -334,6 +390,19 @@ class RedisClientCore
   # Members by rank. redis-rb's with_scores: form isn't mirrored (ledger).
   def zrange(key, start, stop)
     strings_reply(["ZRANGE", key.to_s, start.to_s, stop.to_s])
+  end
+
+  # Removes members scored min..max; the count removed. min and max are
+  # written with to_s, so "-inf", "+inf" and "(5" go through as Redis
+  # reads them.
+  def zremrangebyscore(key, min, max)
+    int_reply(["ZREMRANGEBYSCORE", key.to_s, min.to_s, max.to_s])
+  end
+
+  # Removes members ranked start..stop (negative counts from the
+  # highest); the count removed.
+  def zremrangebyrank(key, start, stop)
+    int_reply(["ZREMRANGEBYRANK", key.to_s, start.to_s, stop.to_s])
   end
 
   # A score reply as redis-rb's Floatify reads it.

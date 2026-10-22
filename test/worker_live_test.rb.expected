@@ -1,0 +1,22 @@
+ping         PONG
+rpush_one    1
+rpush_many   3
+lrange       l1,l2,l3
+brpop_0      queue:high h1
+brpop_1      queue:low l3
+brpop_2      queue:low l2
+brpop_3      queue:low l1
+brpop_empty  0
+waited       true
+after        PONG
+stalled      TimeoutError true
+waited       true
+slept        OK
+zrem_score   2
+zrem_open    0
+zrem_rank    1
+zrange       j3,j4
+pipelined    2,0,2
+zrange_after j5
+brpop_piped  queue:piped p2
+done

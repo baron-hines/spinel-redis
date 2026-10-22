@@ -23,6 +23,17 @@ class RedisTransport
     end
   end
 
+  # The read deadline in seconds, -1.0 for none. Blocking commands widen
+  # it for one call (RedisClientCore#blocking_reply).
+  def read_timeout
+    @read_timeout
+  end
+
+  def set_read_timeout(seconds)
+    @read_timeout = seconds
+    nil
+  end
+
   # The raw socket fd — embedders with their own event loop park on
   # this (poll / Tep::Scheduler.io_wait) and then drain.
   def fd

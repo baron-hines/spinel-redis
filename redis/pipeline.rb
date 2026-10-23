@@ -61,7 +61,7 @@ class RedisPipeline
   end
 
   def rpush(key, value)
-    queue(["RPUSH", key.to_s, value.to_s], INT)
+    queue(RedisClientCore.push_argv("RPUSH", key, value), INT)
   end
 
   def sadd(key, member)
@@ -74,5 +74,13 @@ class RedisPipeline
 
   def zadd(key, score, member)
     queue(["ZADD", key.to_s, score.to_s, member.to_s], BOOL)
+  end
+
+  def zremrangebyscore(key, min, max)
+    queue(["ZREMRANGEBYSCORE", key.to_s, min.to_s, max.to_s], INT)
+  end
+
+  def zremrangebyrank(key, start, stop)
+    queue(["ZREMRANGEBYRANK", key.to_s, start.to_s, stop.to_s], INT)
   end
 end

@@ -58,6 +58,23 @@ from matz/spinel#9584, and `sp_net_connect_timeout`).
 r = Redis.new(url: ENV["REDIS_URL"], connect_timeout: 1.0, read_timeout: 1.0)
 ```
 
+`brpop` takes redis-rb's `timeout:` keyword and pops from the first of
+the keys that has an element. It returns `[key, value]`, or `[]` when
+the timeout passes (redis-rb returns `nil` there). While it waits, the
+read deadline is its timeout plus `read_timeout:`, as redis-rb sets it,
+so a server that stops answering is still noticed. `timeout: 0` waits
+for a value as long as it takes, with no read deadline:
+
+```ruby
+r = Redis.new(url: ENV["REDIS_URL"], read_timeout: 5.0)
+r.brpop(["queue:critical", "queue:default"], timeout: 2)
+# => ["queue:default", job], or [] after 2 s (the read gives up at 7 s)
+```
+
+`rpush` takes one value or an Array of them, and `zremrangebyscore` and
+`zremrangebyrank` trim a sorted set; their bounds go out with `to_s`, so
+`"-inf"`, `"+inf"` and `"(5"` work as Redis reads them.
+
 Pipelining takes redis-rb's block form. The commands go out in one
 write, every reply is read, and the first error reply is raised after
 that, so the connection stays in step:
@@ -70,7 +87,8 @@ end                                # => [1, 1]
 ```
 
 The block's recorder has `set`, `del`, `incrby`, `expire`, `lpush`,
-`rpush`, `sadd`, `hset` and `zadd`. A pipeline is not a transaction.
+`rpush`, `sadd`, `hset`, `zadd`, `zremrangebyscore` and
+`zremrangebyrank`. A pipeline is not a transaction.
 
 Pub/sub mirrors redis-rb's block DSL. A subscribed connection is
 dedicated (RESP2), so pubsub gets its own; the loop blocks until the
@@ -193,7 +211,8 @@ Deliberately not in this release, recorded rather than implied:
   straightforward additions when a consumer needs them. `unix://` URLs
   raise an `ArgumentError`.
 - Variadic command forms are narrowed to typed arities (`del(key)`,
-  `sadd(key, member)`, `zadd(key, score, member)`); `sadd` returns the
+  `sadd(key, member)`, `zadd(key, score, member)`, `lpush(key, value)`);
+  `rpush` takes one value or an Array, as redis-rb's does; `sadd` returns the
   Integer added-count, redis-rb's legacy Boolean mode is not mirrored.
   `zadd` and `zrem` take one member and return a Boolean, as redis-rb's
   single-member forms do. `zadd`'s `nx:`/`xx:`/`incr:` options and
@@ -207,6 +226,11 @@ Deliberately not in this release, recorded rather than implied:
   binary-safe; redis-rb returns them tagged UTF-8. The bytes are the
   same, but `==` against a UTF-8 literal with non-ASCII characters is
   false here. Compare bytes, or `force_encoding("UTF-8")` the reply.
+- `brpop` returns `[]` rather than `nil` when its timeout passes, which
+  keeps one return type for spinel. It takes its keys as an Array, not
+  redis-rb's splat, and isn't in the pipeline recorder (a blocking
+  command holds every reply queued behind it). `blpop`, `brpoplpush`
+  and the `lmove` family aren't mirrored.
 - `pipelined` takes no `exception: false`, and its recorder has only the
   commands listed above. Its return value holds the coerced replies, as
   redis-rb's does, with an error reply's message in its place.

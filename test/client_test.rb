@@ -7,12 +7,28 @@ require "redis/resp"
 require "redis/client"
 require "redis/url"
 
-# Serves canned reply bytes chunk-by-chunk and records every write.
+# Serves canned reply bytes chunk-by-chunk and records every write, and
+# the read deadline each read ran under.
 class ScriptedTransport
   def initialize(chunks)
     @chunks = chunks
     @i = 0
     @written = ""
+    @read_timeout = -1.0
+    @deadlines = ""
+  end
+
+  def read_timeout
+    @read_timeout
+  end
+
+  def set_read_timeout(seconds)
+    @read_timeout = seconds
+    nil
+  end
+
+  def deadlines
+    @deadlines
   end
 
   def write(data)
@@ -21,6 +37,7 @@ class ScriptedTransport
   end
 
   def read_some(max)
+    @deadlines = @deadlines + @read_timeout.to_s + " "
     if @i >= @chunks.length
       return ""
     end
@@ -266,6 +283,70 @@ m = c.zrange("schedule", 0, -1)
 puts "zcard_zrem   " + (n == 2 && r == true).to_s
 puts "zrange       " + (m.length == 1 && m[0] == "job-b").to_s
 
+# ZREMRANGEBYSCORE takes -inf/+inf and exclusive bounds as Strings,
+# ZREMRANGEBYRANK negative ranks; both answer the count removed
+t = ScriptedTransport.new([":3\r\n", ":1\r\n", ":2\r\n"])
+c = RedisClientCore.new(t)
+a = c.zremrangebyscore("dead", "-inf", 1791599558.5)
+b = c.zremrangebyscore("dead", "(5", "+inf")
+d = c.zremrangebyrank("dead", 0, -10001)
+w = t.written
+puts "zrembyscore  " + (w.include?("*4\r\n$16\r\nZREMRANGEBYSCORE\r\n$4\r\ndead\r\n$4\r\n-inf\r\n$12\r\n1791599558.5\r\n") && w.include?("$2\r\n(5\r\n$4\r\n+inf\r\n")).to_s
+puts "zrembyrank   " + w.include?("*4\r\n$15\r\nZREMRANGEBYRANK\r\n$4\r\ndead\r\n$1\r\n0\r\n$6\r\n-10001\r\n").to_s
+puts "zrem_counts  " + (a == 3 && b == 1 && d == 2).to_s
+
+# -- lists: multi-value RPUSH and BRPOP ----------------------------------------
+
+# RPUSH with one value, then with an Array: one command, values in order
+t = ScriptedTransport.new([":1\r\n", ":4\r\n"])
+c = RedisClientCore.new(t)
+a = c.rpush("queue:default", "j1")
+b = c.rpush("queue:default", ["j2", "j3", "j4"])
+w = t.written
+puts "rpush_wire   " + (w == "*3\r\n$5\r\nRPUSH\r\n$13\r\nqueue:default\r\n$2\r\nj1\r\n*5\r\n$5\r\nRPUSH\r\n$13\r\nqueue:default\r\n$2\r\nj2\r\n$2\r\nj3\r\n$2\r\nj4\r\n").to_s
+puts "rpush_len    " + (a == 1 && b == 4).to_s
+
+# BRPOP: keys in order, then the timeout; [key, value] back
+t = ScriptedTransport.new(["*2\r\n$14\r\nqueue:critical\r\n$2\r\nj1\r\n"])
+c = RedisClientCore.new(t)
+v = c.brpop(["queue:critical", "queue:default"], timeout: 2)
+puts "brpop_wire   " + (t.written == "*4\r\n$5\r\nBRPOP\r\n$14\r\nqueue:critical\r\n$13\r\nqueue:default\r\n$1\r\n2\r\n").to_s
+puts "brpop_pair   " + (v.length == 2 && v[0] == "queue:critical" && v[1] == "j1").to_s
+
+# the timeout passing is a nil multi-bulk: [] (redis-rb: nil)
+t = ScriptedTransport.new(["*-1\r\n", "+PONG\r\n"])
+c = RedisClientCore.new(t)
+v = c.brpop(["queue:default"], timeout: 1)
+puts "brpop_nil    " + (v.length == 0).to_s
+puts "brpop_insync " + c.ping
+
+# the read deadline: timeout + read_timeout while BRPOP waits, the
+# configured one again after; 0 (block forever) waits without a deadline;
+# no read_timeout stays none
+t = ScriptedTransport.new(["*-1\r\n", "*-1\r\n", "+PONG\r\n"])
+t.set_read_timeout(0.5)
+c = RedisClientCore.new(t)
+c.brpop(["q"], timeout: 2)
+c.brpop(["q"], timeout: 0)
+c.ping
+puts "brpop_dl     " + t.deadlines
+t = ScriptedTransport.new(["*-1\r\n"])
+c = RedisClientCore.new(t)
+c.brpop(["q"], timeout: 2)
+puts "brpop_dl_off " + t.deadlines
+
+# an error reply still puts the deadline back
+t = ScriptedTransport.new(["-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"])
+t.set_read_timeout(0.5)
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.brpop(["s"], timeout: 1)
+rescue Redis::WrongTypeError
+  kind = "wrongtype"
+end
+puts "brpop_error  " + kind + " " + t.read_timeout.to_s
+
 # -- pipelined ------------------------------------------------------------------
 
 # one write for every queued command, every reply read, replies coerced
@@ -329,3 +410,16 @@ rescue Redis::ConnectionError
   kind = "connection"
 end
 puts "pipe_lost    " + kind
+
+# the worker commands queue like the rest: multi-value RPUSH and both
+# ZREMRANGEs, Integer replies
+t = ScriptedTransport.new([":2\r\n:1\r\n:0\r\n"])
+c = RedisClientCore.new(t)
+res = c.pipelined do |p|
+  p.rpush("queue:default", ["a", "b"])
+  p.zremrangebyscore("dead", "-inf", 100)
+  p.zremrangebyrank("dead", 0, -10001)
+end
+w = t.written
+puts "pipe_worker  " + (w == "*4\r\n$5\r\nRPUSH\r\n$13\r\nqueue:default\r\n$1\r\na\r\n$1\r\nb\r\n*4\r\n$16\r\nZREMRANGEBYSCORE\r\n$4\r\ndead\r\n$4\r\n-inf\r\n$3\r\n100\r\n*4\r\n$15\r\nZREMRANGEBYRANK\r\n$4\r\ndead\r\n$1\r\n0\r\n$6\r\n-10001\r\n").to_s
+puts "pipe_wvalues " + (res[0] == 2 && res[1] == 1 && res[2] == 0).to_s

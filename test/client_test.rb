@@ -423,3 +423,30 @@ end
 w = t.written
 puts "pipe_worker  " + (w == "*4\r\n$5\r\nRPUSH\r\n$13\r\nqueue:default\r\n$1\r\na\r\n$1\r\nb\r\n*4\r\n$16\r\nZREMRANGEBYSCORE\r\n$4\r\ndead\r\n$4\r\n-inf\r\n$3\r\n100\r\n*4\r\n$15\r\nZREMRANGEBYRANK\r\n$4\r\ndead\r\n$1\r\n0\r\n$6\r\n-10001\r\n").to_s
 puts "pipe_wvalues " + (res[0] == 2 && res[1] == 1 && res[2] == 0).to_s
+
+# -- scripting: SCRIPT LOAD and EVALSHA ------------------------------------------
+
+# SCRIPT LOAD answers the SHA1; EVALSHA sends numkeys, then the keys and
+# the arguments, and answers the bulk reply or nil
+t = ScriptedTransport.new(["$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n", "$5\r\njob-a\r\n", "$-1\r\n"])
+c = RedisClientCore.new(t)
+sha = c.script_load("return 1")
+a = c.evalsha(sha, ["retry"], ["1791599558.5"])
+b = c.evalsha(sha, ["schedule"], ["1791599558.5"])
+w = t.written
+puts "script_load  " + (sha == "e0e1f9fabfc9d4800c877a703b823ac0578ff8db" && w.include?("*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$8\r\nreturn 1\r\n")).to_s
+puts "evalsha_wire " + w.include?("*5\r\n$7\r\nEVALSHA\r\n$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n$1\r\n1\r\n$5\r\nretry\r\n$12\r\n1791599558.5\r\n").to_s
+puts "evalsha_vals " + (a == "job-a" && b.nil?).to_s
+
+# NOSCRIPT is a NoScriptError, a CommandError, and the connection stays
+# in step for the reload
+t = ScriptedTransport.new(["-NOSCRIPT No matching script. Please use EVAL.\r\n", "$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"])
+rescue Redis::NoScriptError => e
+  kind = "noscript " + e.is_a?(Redis::CommandError).to_s + " " + e.message.include?("NOSCRIPT").to_s
+end
+puts "err_noscript " + kind
+puts "after_nosc   " + (c.script_load("return 1").length == 40).to_s

@@ -416,6 +416,32 @@ class RedisClientCore
     s.to_f
   end
 
+  # -- scripting ---------------------------------------------------------------
+
+  # SCRIPT LOAD: the script's SHA1 digest, as redis-rb's
+  # script(:load, script) answers it.
+  def script_load(script)
+    str_reply(["SCRIPT", "LOAD", script.to_s])
+  end
+
+  # EVALSHA sha numkeys key... arg...: the script's bulk reply, or nil
+  # when it returns nothing, as the one-member pops a Sidekiq-style
+  # scheduler runs answer. keys and argv are Arrays of Strings, in
+  # redis-rb's positional evalsha(sha, keys, argv) form; Integer and
+  # Array replies aren't mirrored (ledger). A script the server doesn't
+  # have raises Redis::CommandError, its message carrying NOSCRIPT, so
+  # the caller can load it again.
+  def evalsha(sha, keys, argv)
+    cmd = ["EVALSHA", sha.to_s, keys.length.to_s]
+    keys.each do |k|
+      cmd.push(k.to_s)
+    end
+    argv.each do |a|
+      cmd.push(a.to_s)
+    end
+    opt_reply(cmd)
+  end
+
   # -- pub/sub (publish side only; SUBSCRIBE mode is the next milestone) --
 
   def publish(channel, message)

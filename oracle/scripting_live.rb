@@ -28,7 +28,7 @@ end
 puts "left         " + r.zrange("retry", 0, -1).join(",")
 puts "empty_set    " + r.evalsha(sha, ["schedule"], ["1791599558.5"]).nil?.to_s
 
-r.script(:flush)
+puts "flushed      " + r.script(:flush)
 kind = "none"
 begin
   r.evalsha(sha, ["retry"], ["9999999999"])

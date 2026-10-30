@@ -418,10 +418,18 @@ class RedisClientCore
 
   # -- scripting ---------------------------------------------------------------
 
-  # SCRIPT LOAD: the script's SHA1 digest, as redis-rb's
-  # script(:load, script) answers it.
-  def script_load(script)
-    str_reply(["SCRIPT", "LOAD", script.to_s])
+  # redis-rb's script(:load, source), answering the script's SHA1
+  # digest, and script(:flush), answering "OK". Other subcommands
+  # (`:exists`, `:kill`) aren't mirrored and raise ArgumentError.
+  def script(subcommand, source = "")
+    sub = subcommand.to_s
+    if sub == "load"
+      return str_reply(["SCRIPT", "LOAD", source.to_s])
+    end
+    if sub == "flush"
+      return str_reply(["SCRIPT", "FLUSH"])
+    end
+    raise ArgumentError, "script(:" + sub + ") isn't supported; only :load and :flush are"
   end
 
   # EVALSHA sha numkeys key... arg...: the script's bulk reply, or nil

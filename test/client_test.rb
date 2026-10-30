@@ -430,7 +430,7 @@ puts "pipe_wvalues " + (res[0] == 2 && res[1] == 1 && res[2] == 0).to_s
 # the arguments, and answers the bulk reply or nil
 t = ScriptedTransport.new(["$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n", "$5\r\njob-a\r\n", "$-1\r\n"])
 c = RedisClientCore.new(t)
-sha = c.script_load("return 1")
+sha = c.script(:load, "return 1")
 a = c.evalsha(sha, ["retry"], ["1791599558.5"])
 b = c.evalsha(sha, ["schedule"], ["1791599558.5"])
 w = t.written
@@ -449,4 +449,17 @@ rescue Redis::NoScriptError => e
   kind = "noscript " + e.is_a?(Redis::CommandError).to_s + " " + e.message.include?("NOSCRIPT").to_s
 end
 puts "err_noscript " + kind
-puts "after_nosc   " + (c.script_load("return 1").length == 40).to_s
+puts "after_nosc   " + (c.script(:load, "return 1").length == 40).to_s
+
+# SCRIPT FLUSH answers OK; other subcommands aren't mirrored
+t = ScriptedTransport.new(["+OK\r\n"])
+c = RedisClientCore.new(t)
+flushed = c.script(:flush)
+puts "script_flush " + (flushed == "OK" && t.written == "*2\r\n$6\r\nSCRIPT\r\n$5\r\nFLUSH\r\n").to_s
+other = "none"
+begin
+  c.script(:exists, "abc")
+rescue ArgumentError => e
+  other = e.message
+end
+puts "script_other " + other

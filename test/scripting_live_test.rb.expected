@@ -4,6 +4,7 @@ pop_1        due-2
 pop_2        nil
 left         later
 empty_set    true
+flushed      OK
 after_flush  noscript true
 reload_same  true
 pop_later    later

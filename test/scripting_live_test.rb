@@ -42,7 +42,7 @@ ScriptShell.sp_net_shell_capture("redis-server --port 16432 --save '' --appendon
 r = script_connect(SCRIPT_PORT)
 r.flushdb
 
-sha = r.script_load(ZPOPBYSCORE)
+sha = r.script(:load, ZPOPBYSCORE)
 puts "sha          " + sha
 
 r.zadd("retry", 200.5, "due-2")
@@ -57,7 +57,7 @@ end
 puts "left         " + r.zrange("retry", 0, -1).join(",")
 puts "empty_set    " + r.evalsha(sha, ["schedule"], ["1791599558.5"]).nil?.to_s
 
-ScriptShell.sp_net_shell_capture("redis-cli -p 16432 script flush", 64)
+puts "flushed      " + r.script(:flush)
 kind = "none"
 begin
   r.evalsha(sha, ["retry"], ["9999999999"])
@@ -65,7 +65,7 @@ rescue Redis::NoScriptError => e
   kind = "noscript " + e.is_a?(Redis::CommandError).to_s
 end
 puts "after_flush  " + kind
-puts "reload_same  " + (r.script_load(ZPOPBYSCORE) == sha).to_s
+puts "reload_same  " + (r.script(:load, ZPOPBYSCORE) == sha).to_s
 puts "pop_later    " + r.evalsha(sha, ["retry"], ["9999999999"]).to_s
 
 r.close

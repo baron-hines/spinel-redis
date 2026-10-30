@@ -153,12 +153,16 @@ class RedisClientCore
   end
 
   # Bulk-or-nil: redis-rb returns nil for a missing key.
+  #
+  # One nullable local rather than an early `return nil`: in a large
+  # program, Spinel 6577e8393 typed the early-return form as String and
+  # a nil reply reached the caller as stale text (a GET of a missing key
+  # answered the GET command's own bytes).
   def opt_reply(argv)
     r = call_argv(argv)
-    if r.kind == RespValue::NILV
-      return nil
-    end
-    r.str
+    out = nil
+    out = r.str unless r.nil_reply?
+    out
   end
 
   def strings_reply(argv)

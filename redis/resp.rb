@@ -24,6 +24,11 @@ class RespValue
     @items = items
   end
 
+  # Whether this is a nil reply ($-1 or *-1).
+  def nil_reply?
+    @kind == NILV
+  end
+
   def kind
     @kind
   end

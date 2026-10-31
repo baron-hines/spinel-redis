@@ -463,3 +463,24 @@ rescue ArgumentError => e
   other = e.message
 end
 puts "script_other " + other
+
+# An Integer or Array script reply isn't mirrored: it raises
+# Redis::BaseError (not a CommandError, since the server didn't refuse
+# anything) rather than answer "", and the reply is read in full, so the
+# next command still lines up
+t = ScriptedTransport.new([":1\r\n", "*2\r\n$1\r\na\r\n$1\r\nb\r\n", "$5\r\njob-a\r\n"])
+c = RedisClientCore.new(t)
+kinds = []
+2.times do
+  k = "none"
+  begin
+    c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"])
+  rescue Redis::CommandError
+    k = "command"
+  rescue Redis::BaseError => e
+    k = e.message.include?("Integer") ? "base_int" : (e.message.include?("Array") ? "base_array" : "base")
+  end
+  kinds.push(k)
+end
+puts "evalsha_kind " + kinds.join(",")
+puts "after_kind   " + (c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"]) == "job-a").to_s

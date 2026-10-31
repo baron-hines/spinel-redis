@@ -439,10 +439,11 @@ class RedisClientCore
   # EVALSHA sha numkeys key... arg...: the script's bulk reply, or nil
   # when it returns nothing, as the one-member pops a Sidekiq-style
   # scheduler runs answer. keys and argv are Arrays of Strings, in
-  # redis-rb's positional evalsha(sha, keys, argv) form; Integer and
-  # Array replies aren't mirrored (ledger). A script the server doesn't
-  # have raises Redis::CommandError, its message carrying NOSCRIPT, so
-  # the caller can load it again.
+  # redis-rb's positional evalsha(sha, keys, argv) form. Integer and
+  # Array replies aren't mirrored (ledger): they raise Redis::BaseError
+  # rather than reach the caller as "", which redis-rb would never
+  # answer. A script the server doesn't have raises
+  # Redis::NoScriptError, so the caller can load it again.
   def evalsha(sha, keys, argv)
     cmd = ["EVALSHA", sha.to_s, keys.length.to_s]
     keys.each do |k|
@@ -451,7 +452,16 @@ class RedisClientCore
     argv.each do |a|
       cmd.push(a.to_s)
     end
-    opt_reply(cmd)
+    r = call_argv(cmd)
+    if r.kind == RespValue::INT
+      raise Redis::BaseError, "redis: EVALSHA answered an Integer; only a bulk string or nil reply is mirrored"
+    end
+    if r.kind == RespValue::ARRAY
+      raise Redis::BaseError, "redis: EVALSHA answered an Array; only a bulk string or nil reply is mirrored"
+    end
+    out = nil
+    out = r.str unless r.nil_reply?
+    out
   end
 
   # -- pub/sub (publish side only; SUBSCRIBE mode is the next milestone) --

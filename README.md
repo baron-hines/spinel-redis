@@ -78,9 +78,9 @@ r.brpop(["queue:critical", "queue:default"], timeout: 2)
 Lua scripts run by SHA, as Sidekiq's scheduler runs its
 `ZPOPBYSCORE` script. `script(:load, lua)` returns the SHA, as
 redis-rb's does, and `evalsha` takes the keys and arguments
-positionally, as redis-rb's positional form does. A script the server doesn't hold (after a restart or
-`SCRIPT FLUSH`) raises `Redis::NoScriptError`, so the caller loads it
-again and retries:
+positionally, as redis-rb's positional form does. A script the server
+doesn't hold (after a restart or `SCRIPT FLUSH`) raises
+`Redis::NoScriptError`, so the caller loads it again and retries:
 
 ```ruby
 sha = r.script(:load, lua)
@@ -245,7 +245,8 @@ Deliberately not in this release, recorded rather than implied:
   and the `lmove` family aren't mirrored.
 - `script` takes only `:load` and `:flush`, and `evalsha` takes
   `(sha, keys, argv)` positionally, not redis-rb's `keys:`/`argv:`
-  keywords. A script's reply must be a bulk string or nil. `eval` and
+  keywords. A script's reply must be a bulk string or nil; an Integer
+  or Array reply raises `Redis::BaseError` instead. `eval` and
   the other `SCRIPT` subcommands aren't mirrored.
 - `pipelined` takes no `exception: false`, and its recorder has only the
   commands listed above. Its return value holds the coerced replies, as

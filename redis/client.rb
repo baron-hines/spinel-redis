@@ -153,12 +153,16 @@ class RedisClientCore
   end
 
   # Bulk-or-nil: redis-rb returns nil for a missing key.
+  #
+  # One nullable local rather than an early `return nil`: in a large
+  # program, Spinel 6577e8393 typed the early-return form as String and
+  # a nil reply reached the caller as stale text (a GET of a missing key
+  # answered the GET command's own bytes).
   def opt_reply(argv)
     r = call_argv(argv)
-    if r.kind == RespValue::NILV
-      return nil
-    end
-    r.str
+    out = nil
+    out = r.str unless r.nil_reply?
+    out
   end
 
   def strings_reply(argv)
@@ -414,6 +418,50 @@ class RedisClientCore
       return -Float::INFINITY
     end
     s.to_f
+  end
+
+  # -- scripting ---------------------------------------------------------------
+
+  # redis-rb's script(:load, source), answering the script's SHA1
+  # digest, and script(:flush), answering "OK". Other subcommands
+  # (`:exists`, `:kill`) aren't mirrored and raise ArgumentError.
+  def script(subcommand, source = "")
+    sub = subcommand.to_s
+    if sub == "load"
+      return str_reply(["SCRIPT", "LOAD", source.to_s])
+    end
+    if sub == "flush"
+      return str_reply(["SCRIPT", "FLUSH"])
+    end
+    raise ArgumentError, "script(:" + sub + ") isn't supported; only :load and :flush are"
+  end
+
+  # EVALSHA sha numkeys key... arg...: the script's bulk reply, or nil
+  # when it returns nothing, as the one-member pops a Sidekiq-style
+  # scheduler runs answer. keys and argv are Arrays of Strings, in
+  # redis-rb's positional evalsha(sha, keys, argv) form. Integer and
+  # Array replies aren't mirrored (ledger): they raise Redis::BaseError
+  # rather than reach the caller as "", which redis-rb would never
+  # answer. A script the server doesn't have raises
+  # Redis::NoScriptError, so the caller can load it again.
+  def evalsha(sha, keys, argv)
+    cmd = ["EVALSHA", sha.to_s, keys.length.to_s]
+    keys.each do |k|
+      cmd.push(k.to_s)
+    end
+    argv.each do |a|
+      cmd.push(a.to_s)
+    end
+    r = call_argv(cmd)
+    if r.kind == RespValue::INT
+      raise Redis::BaseError, "redis: EVALSHA answered an Integer; only a bulk string or nil reply is mirrored"
+    end
+    if r.kind == RespValue::ARRAY
+      raise Redis::BaseError, "redis: EVALSHA answered an Array; only a bulk string or nil reply is mirrored"
+    end
+    out = nil
+    out = r.str unless r.nil_reply?
+    out
   end
 
   # -- pub/sub (publish side only; SUBSCRIBE mode is the next milestone) --

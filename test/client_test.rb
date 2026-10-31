@@ -423,3 +423,64 @@ end
 w = t.written
 puts "pipe_worker  " + (w == "*4\r\n$5\r\nRPUSH\r\n$13\r\nqueue:default\r\n$1\r\na\r\n$1\r\nb\r\n*4\r\n$16\r\nZREMRANGEBYSCORE\r\n$4\r\ndead\r\n$4\r\n-inf\r\n$3\r\n100\r\n*4\r\n$15\r\nZREMRANGEBYRANK\r\n$4\r\ndead\r\n$1\r\n0\r\n$6\r\n-10001\r\n").to_s
 puts "pipe_wvalues " + (res[0] == 2 && res[1] == 1 && res[2] == 0).to_s
+
+# -- scripting: SCRIPT LOAD and EVALSHA ------------------------------------------
+
+# SCRIPT LOAD answers the SHA1; EVALSHA sends numkeys, then the keys and
+# the arguments, and answers the bulk reply or nil
+t = ScriptedTransport.new(["$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n", "$5\r\njob-a\r\n", "$-1\r\n"])
+c = RedisClientCore.new(t)
+sha = c.script(:load, "return 1")
+a = c.evalsha(sha, ["retry"], ["1791599558.5"])
+b = c.evalsha(sha, ["schedule"], ["1791599558.5"])
+w = t.written
+puts "script_load  " + (sha == "e0e1f9fabfc9d4800c877a703b823ac0578ff8db" && w.include?("*3\r\n$6\r\nSCRIPT\r\n$4\r\nLOAD\r\n$8\r\nreturn 1\r\n")).to_s
+puts "evalsha_wire " + w.include?("*5\r\n$7\r\nEVALSHA\r\n$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n$1\r\n1\r\n$5\r\nretry\r\n$12\r\n1791599558.5\r\n").to_s
+puts "evalsha_vals " + (a == "job-a" && b.nil?).to_s
+
+# NOSCRIPT is a NoScriptError, a CommandError, and the connection stays
+# in step for the reload
+t = ScriptedTransport.new(["-NOSCRIPT No matching script. Please use EVAL.\r\n", "$40\r\ne0e1f9fabfc9d4800c877a703b823ac0578ff8db\r\n"])
+c = RedisClientCore.new(t)
+kind = "none"
+begin
+  c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"])
+rescue Redis::NoScriptError => e
+  kind = "noscript " + e.is_a?(Redis::CommandError).to_s + " " + e.message.include?("NOSCRIPT").to_s
+end
+puts "err_noscript " + kind
+puts "after_nosc   " + (c.script(:load, "return 1").length == 40).to_s
+
+# SCRIPT FLUSH answers OK; other subcommands aren't mirrored
+t = ScriptedTransport.new(["+OK\r\n"])
+c = RedisClientCore.new(t)
+flushed = c.script(:flush)
+puts "script_flush " + (flushed == "OK" && t.written == "*2\r\n$6\r\nSCRIPT\r\n$5\r\nFLUSH\r\n").to_s
+other = "none"
+begin
+  c.script(:exists, "abc")
+rescue ArgumentError => e
+  other = e.message
+end
+puts "script_other " + other
+
+# An Integer or Array script reply isn't mirrored: it raises
+# Redis::BaseError (not a CommandError, since the server didn't refuse
+# anything) rather than answer "", and the reply is read in full, so the
+# next command still lines up
+t = ScriptedTransport.new([":1\r\n", "*2\r\n$1\r\na\r\n$1\r\nb\r\n", "$5\r\njob-a\r\n"])
+c = RedisClientCore.new(t)
+kinds = []
+2.times do
+  k = "none"
+  begin
+    c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"])
+  rescue Redis::CommandError
+    k = "command"
+  rescue Redis::BaseError => e
+    k = e.message.include?("Integer") ? "base_int" : (e.message.include?("Array") ? "base_array" : "base")
+  end
+  kinds.push(k)
+end
+puts "evalsha_kind " + kinds.join(",")
+puts "after_kind   " + (c.evalsha("e0e1f9fabfc9d4800c877a703b823ac0578ff8db", ["retry"], ["1"]) == "job-a").to_s

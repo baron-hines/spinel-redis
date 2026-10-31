@@ -26,6 +26,10 @@ class Redis < RedisClientCore
   class OutOfMemoryError < CommandError
   end
 
+  # NOSCRIPT: EVALSHA named a script the server doesn't have.
+  class NoScriptError < CommandError
+  end
+
   # Base error for connection errors.
   class BaseConnectionError < BaseError
   end
@@ -52,6 +56,9 @@ class Redis < RedisClientCore
     end
     if message.start_with?("OOM")
       return OutOfMemoryError.new("redis: " + message)
+    end
+    if message.start_with?("NOSCRIPT")
+      return NoScriptError.new("redis: " + message)
     end
     CommandError.new("redis: " + message)
   end
